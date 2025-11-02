@@ -51,11 +51,24 @@ func (uc *storeUseCase) Update(store *domain.Store) error {
 		return errors.New("store not found")
 	}
 
-	// Update only the mutable fields.
-	existingStore.Name = store.Name
-	existingStore.Description = store.Description
-	existingStore.Address = store.Address
-	existingStore.Phone = store.Phone
+	// Update only the mutable fields if they are provided in the update request.
+	// This prevents overwriting existing data with empty strings if a field is not sent.
+	if store.Name != "" {
+		existingStore.Name = store.Name
+	}
+	if store.Description != "" {
+		existingStore.Description = store.Description
+	}
+	if store.Address != "" {
+		existingStore.Address = store.Address
+	}
+	if store.Phone != "" {
+		existingStore.Phone = store.Phone
+	}
+	// Update PhotoProfile only if a new photo is provided
+	if store.PhotoProfile != "" {
+		existingStore.PhotoProfile = store.PhotoProfile
+	}
 
 	return uc.storeRepo.Update(existingStore)
 }

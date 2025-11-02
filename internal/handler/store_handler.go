@@ -1,13 +1,17 @@
 package handler
 
 import (
+	"fmt"
+	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strconv"
 
 	"mini-project-ostore/internal/domain"
 	"mini-project-ostore/internal/usecase"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type StoreHandler struct {
@@ -19,24 +23,28 @@ func NewStoreHandler(storeUC usecase.StoreUseCase) *StoreHandler {
 }
 
 type CreateStoreRequest struct {
-	UserID      uint   `json:"user_id" binding:"required"`
-	Name        string `json:"name" binding:"required,min=3,max=100"`
-	Description string `json:"description"`
-	Address     string `json:"address"`
-	Phone       string `json:"phone" binding:"omitempty"`
+	UserID      uint   `form:"user_id" binding:"required"`
+	Name        string `form:"name" binding:"required,min=3,max=100"`
+	Description string `form:"description"`
+	Address     string `form:"address"`
+	Phone       string `form:"phone" binding:"omitempty"`
 }
 
 type UpdateStoreRequest struct {
-	Name        string `json:"name" binding:"omitempty,min=3,max=100"`
-	Description string `json:"description"`
-	Address     string `json:"address"`
-	Phone       string `json:"phone" binding:"omitempty"`
+	Name        string                `form:"name" binding:"omitempty,min=3,max=100"`
+	Description string                `form:"description"`
+	Address     string                `form:"address"`
+	Phone       string                `form:"phone" binding:"omitempty"`
+	PhotoProfile *multipart.FileHeader `form:"photo_profile"` // Field for file upload
 }
 
 // CreateStore handles the creation of a new store.
 func (h *StoreHandler) CreateStore(c *gin.Context) {
 	var req CreateStoreRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	// Changed to c.ShouldBind to handle form-data if files are to be included in CreateStore
+	// For now, it's JSON, so c.ShouldBindJSON is more appropriate if no file upload is expected here.
+	// Keeping c.ShouldBind for consistency with UpdateStore if future changes involve files.
+	if err := c.ShouldBind(&req); err != nil { 
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -68,8 +76,10 @@ func (h *StoreHandler) GetStores(c *gin.Context) {
 }
 
 // GetUserStores retrieves all stores for a specific user.
+// This handler currently expects user ID from path parameter, but in a protected route
+// it might come from the authenticated user context.
 func (h *StoreHandler) GetUserStores(c *gin.Context) {
-	userIDStr := c.Param("id") // Assuming the user ID is passed as a path parameter, e.g., /users/:id/stores
+	userIDStr := c.Param("id") 
 	userID, err := strconv.ParseUint(userIDStr, 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
@@ -101,7 +111,7 @@ func (h *StoreHandler) GetStoreByID(c *gin.Context) {
 	c.JSON(http.StatusOK, store)
 }
 
-// UpdateStore updates an existing store.
+// UpdateStore updates an existing store, including handling profile photo upload.
 func (h *StoreHandler) UpdateStore(c *gin.Context) {
 	storeIDStr := c.Param("id_toko")
 	storeID, err := strconv.ParseUint(storeIDStr, 10, 32)
@@ -111,7 +121,8 @@ func (h *StoreHandler) UpdateStore(c *gin.Context) {
 	}
 
 	var req UpdateStoreRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	// Use c.ShouldBind to handle form-data which includes both text fields and file uploads
+	if err := c.ShouldBind(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -128,6 +139,30 @@ func (h *StoreHandler) UpdateStore(c *gin.Context) {
 	}
 	if req.Phone != "" {
 		store.Phone = req.Phone
+	}
+
+	// Handle photo profile upload
+	if req.PhotoProfile != nil {
+		// Limit upload size to 8MB
+		c.Request.ParseMultipartForm(8 << 20) // 8MB
+
+		file := req.PhotoProfile
+		if file.Size > (8 << 20) { // 8MB
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file size exceeds 8MB limit"})
+			return
+		}
+
+		// Generate a unique filename
+		extension := filepath.Ext(file.Filename)
+		newFileName := uuid.New().String() + extension
+		filePath := filepath.Join("uploads", newFileName)
+
+		// Save the file
+		if err := c.SaveUploadedFile(file, filePath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save photo profile: %v", err)})
+			return
+		}
+		store.PhotoProfile = "/" + filePath // Store the path relative to the server root
 	}
 
 	if err := h.storeUC.Update(store); err != nil {
@@ -154,6 +189,7 @@ func (h *StoreHandler) DeleteStore(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "Store deleted successfully"})
 }
+
 // GetMyStore retrieves the store of the currently authenticated user.
 func (h *StoreHandler) GetMyStore(c *gin.Context) {
 	userID, exists := c.Get("user_id")
