@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"os" // Added for file operations like creating directories and deleting files
 	"path/filepath"
 	"strconv"
+	"strings" // Added for string manipulation, e.g., checking file extensions
 
 	"mini-project-ostore/internal/domain" // Import the domain package
 	"mini-project-ostore/internal/usecase"
@@ -50,10 +52,7 @@ type PaginatedStoreResponse struct {
 // CreateStore handles the creation of a new store.
 func (h *StoreHandler) CreateStore(c *gin.Context) {
 	var req CreateStoreRequest
-	// Changed to c.ShouldBind to handle form-data if files are to be included in CreateStore
-	// For now, it's JSON, so c.ShouldBindJSON is more appropriate if no file upload is expected here.
-	// Keeping c.ShouldBind for consistency with UpdateStore if future changes involve files.
-	if err := c.ShouldBind(&req); err != nil { 
+	if err := c.ShouldBind(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -123,7 +122,7 @@ func (h *StoreHandler) GetStores(c *gin.Context) {
 // This handler currently expects user ID from path parameter, but in a protected route
 // it might come from the authenticated user context.
 func (h *StoreHandler) GetUserStores(c *gin.Context) {
-	userIDStr := c.Param("id") 
+	userIDStr := c.Param("id")
 	userID, err := strconv.ParseUint(userIDStr, 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
@@ -164,6 +163,27 @@ func (h *StoreHandler) UpdateStore(c *gin.Context) {
 		return
 	}
 
+	// 1. Authorization check
+	// Get userID from context (set by authentication middleware)
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	authenticatedUserID := userID.(uint)
+
+	// Fetch existing store to check ownership and get current photo path
+	existingStore, err := h.storeUC.GetByID(uint(storeID))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Store not found or " + err.Error()})
+		return
+	}
+
+	if existingStore.UserID != authenticatedUserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You are not authorized to update this store"})
+		return
+	}
+
 	var req UpdateStoreRequest
 	// Use c.ShouldBind to handle form-data which includes both text fields and file uploads
 	if err := c.ShouldBind(&req); err != nil {
@@ -171,45 +191,87 @@ func (h *StoreHandler) UpdateStore(c *gin.Context) {
 		return
 	}
 
-	store := &domain.Store{ID: uint(storeID)}
+	// Create a store object for updates, pre-filling with existing data to ensure all fields are considered.
+	// We only update fields that are explicitly provided in the request.
+	storeToUpdate := existingStore // Start with existing data
 	if req.Name != "" {
-		store.Name = req.Name
+		storeToUpdate.Name = req.Name
 	}
 	if req.Description != "" {
-		store.Description = req.Description
+		storeToUpdate.Description = req.Description
 	}
 	if req.Address != "" {
-		store.Address = req.Address
+		storeToUpdate.Address = req.Address
 	}
 	if req.Phone != "" {
-		store.Phone = req.Phone
+		storeToUpdate.Phone = req.Phone
 	}
 
 	// Handle photo profile upload
 	if req.PhotoProfile != nil {
-		// Limit upload size to 8MB
-		c.Request.ParseMultipartForm(8 << 20) // 8MB
-
+		// Limit upload size to 8MB. c.Request.ParseMultipartForm needs to be called
+		// before accessing file if not using c.ShouldBind which handles it internally.
+		// For c.ShouldBind, the limit should be configured globally or checked here.
+		// c.Request.ParseMultipartForm(8 << 20) // 8MB is usually handled by c.ShouldBind with a global config.
+		// Re-checking here for explicit clarity.
 		file := req.PhotoProfile
 		if file.Size > (8 << 20) { // 8MB
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file size exceeds 8MB limit"})
 			return
 		}
 
-		// Generate a unique filename
-		extension := filepath.Ext(file.Filename)
-		newFileName := uuid.New().String() + extension
-		filePath := filepath.Join("uploads", newFileName)
+		// File type validation
+		allowedExtensions := map[string]bool{
+			".jpg":  true,
+			".jpeg": true,
+			".png":  true,
+			".gif":  true,
+		}
+		extension := strings.ToLower(filepath.Ext(file.Filename))
+		if !allowedExtensions[extension] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file type. Only JPG, JPEG, PNG, GIF are allowed."})
+			return
+		}
 
-		// Save the file
-		if err := c.SaveUploadedFile(file, filePath); err != nil {
+		// Define the target subfolder for store profile photos
+		uploadSubDir := filepath.Join("..", "..", "uploads", "stores")
+		// Create the subfolder if it doesn't exist
+		if err := os.MkdirAll(uploadSubDir, os.ModePerm); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create upload directory: %v", err)})
+			return
+		}
+
+		// Delete old photo profile if it exists and a new one is being uploaded
+		// existingStore.PhotoProfile stores a relative path like "stores/uuid.jpg"
+		if existingStore.PhotoProfile != "" {
+			// Construct the full path to the old file on the filesystem
+			// The PhotoProfile field stores "stores/uuid.jpg", so we join it with the base "uploads" directory
+			oldPhotoFullPath := filepath.Join("..", "..", "uploads", existingStore.PhotoProfile)
+			if err := os.Remove(oldPhotoFullPath); err != nil && !os.IsNotExist(err) {
+				// Log the error but don't stop the process if the old file can't be deleted.
+				// This might happen if the file was already deleted or never existed on disk.
+				fmt.Printf("Warning: Failed to delete old photo profile %s: %v\n", oldPhotoFullPath, err)
+			}
+		}
+
+		// Generate a unique filename using UUID
+		newFileName := uuid.New().String() + extension
+
+		// Construct the relative path to be stored in the database (e.g., "stores/uuid.jpg")
+		dbPhotoPath := filepath.Join("stores", newFileName)
+		storeToUpdate.PhotoProfile = dbPhotoPath // This is the path stored in DB
+
+		// Construct the full path where the file will be saved on the server
+		savePath := filepath.Join(uploadSubDir, newFileName)
+
+		// Save the new file
+		if err := c.SaveUploadedFile(file, savePath); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save photo profile: %v", err)})
 			return
 		}
-		store.PhotoProfile = "/" + filePath // Store the path relative to the server root
 	}
 
-	if err := h.storeUC.Update(store); err != nil {
+	if err := h.storeUC.Update(storeToUpdate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -225,6 +287,11 @@ func (h *StoreHandler) DeleteStore(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid store ID"})
 		return
 	}
+
+	// This handler should also implement an authorization check similar to UpdateStore
+	// to ensure only the owner or an admin can delete a store.
+	// For now, assuming middleware handles general authentication.
+	// TODO: Add authorization check for deletion.
 
 	if err := h.storeUC.Delete(uint(storeID)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
