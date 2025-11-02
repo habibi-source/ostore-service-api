@@ -12,7 +12,7 @@ type StoreRepository interface {
 	FindByID(id uint) (*domain.Store, error)
 	Update(store *domain.Store) error
 	Delete(id uint) error
-	FindAll() ([]domain.Store, error)
+	FindAll(filter domain.StoreFilter) ([]domain.Store, int64, error)
 	FindByUserID(userID uint) ([]domain.Store, error)
 	// Add other store-related methods here as needed
 }
@@ -50,11 +50,29 @@ func (r *storeRepository) Delete(id uint) error {
 	return r.db.Delete(&store, id).Error
 }
 
-// FindAll retrieves all stores from the database.
-func (r *storeRepository) FindAll() ([]domain.Store, error) {
+// FindAll retrieves all stores from the database with pagination and filtering.
+func (r *storeRepository) FindAll(filter domain.StoreFilter) ([]domain.Store, int64, error) {
 	var stores []domain.Store
-	err := r.db.Find(&stores).Error
-	return stores, err
+	query := r.db.Model(&domain.Store{})
+
+	// Apply search filter
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		query = query.Where("name LIKE ? OR description LIKE ? OR address LIKE ?", searchPattern, searchPattern, searchPattern)
+	}
+
+	// Get total count before applying pagination
+	var totalCount int64
+	if err := query.Count(&totalCount).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// Apply pagination
+	offset := (filter.Page - 1) * filter.Limit
+	query = query.Limit(filter.Limit).Offset(offset)
+
+	err := query.Find(&stores).Error
+	return stores, totalCount, err
 }
 
 // FindByUserID retrieves all stores for a specific user.

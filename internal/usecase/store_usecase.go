@@ -13,7 +13,7 @@ type StoreUseCase interface {
 	Update(store *domain.Store) error
 	Delete(id uint) error
 	GetByUserID(userID uint) ([]domain.Store, error)
-	GetAll() ([]domain.Store, error)
+	GetStores(filter domain.StoreFilter) ([]domain.Store, int64, error)
 }
 
 // storeUseCase implements the StoreUseCase interface.
@@ -93,7 +93,7 @@ func (uc *storeUseCase) GetByUserID(userID uint) ([]domain.Store, error) {
 	return uc.storeRepo.FindByUserID(userID)
 }
 
-// GetAll retrieves all stores.
-func (uc *storeUseCase) GetAll() ([]domain.Store, error) {
-	return uc.storeRepo.FindAll()
+// GetStores retrieves all stores with pagination and filtering.
+func (uc *storeUseCase) GetStores(filter domain.StoreFilter) ([]domain.Store, int64, error) {
+	return uc.storeRepo.FindAll(filter)
 }

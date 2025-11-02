@@ -8,37 +8,51 @@ import (
 
 // ProductUseCase defines the interface for product-related business logic.
 type ProductUseCase interface {
-	Create(product *domain.Product) error
+	Create(product *domain.Product, userID uint) error
 	GetByID(id uint) (*domain.Product, error)
-	Update(product *domain.Product) error
-	Delete(id uint) error
-	GetAll() ([]domain.Product, error)
-	GetUserProducts(userID uint) ([]domain.Product, error)
+	Update(product *domain.Product, userID uint) error
+	Delete(id uint, userID uint) error
+	GetProducts(filter domain.ProductFilter) ([]domain.Product, int64, error)
+	GetUserProducts(filter domain.ProductFilter) ([]domain.Product, int64, error)
 }
 
 // productUseCase implements the ProductUseCase interface.
 type productUseCase struct {
 	productRepo  repository.ProductRepository
-	storeRepo    repository.StoreRepository    // For validating StoreID
-	userRepo     repository.UserRepository     // For validating UserID in GetUserProducts
-	categoryRepo repository.CategoryRepository // For validating CategoryID
+	storeRepo    repository.StoreRepository
+	userRepo     repository.UserRepository
+	categoryRepo repository.CategoryRepository
 }
 
 // NewProductUseCase creates a new instance of ProductUseCase.
-func NewProductUseCase(productRepo repository.ProductRepository, storeRepo repository.StoreRepository, userRepo repository.UserRepository, categoryRepo repository.CategoryRepository) ProductUseCase {
-	return &productUseCase{productRepo: productRepo, storeRepo: storeRepo, userRepo: userRepo, categoryRepo: categoryRepo}
+func NewProductUseCase(
+	productRepo repository.ProductRepository,
+	storeRepo repository.StoreRepository,
+	userRepo repository.UserRepository,
+	categoryRepo repository.CategoryRepository,
+) ProductUseCase {
+	return &productUseCase{
+		productRepo:  productRepo,
+		storeRepo:    storeRepo,
+		userRepo:     userRepo,
+		categoryRepo: categoryRepo,
+	}
 }
 
-// Create a new product.
-func (uc *productUseCase) Create(product *domain.Product) error {
-	// Check if the store exists
-	_, err := uc.storeRepo.FindByID(product.StoreID)
+// Create creates a new product for a user's store.
+func (uc *productUseCase) Create(product *domain.Product, userID uint) error {
+	store, err := uc.storeRepo.FindByID(product.StoreID)
 	if err != nil {
 		return errors.New("store not found for the given StoreID")
 	}
 
+	// ✅ Validasi: store harus milik user yang login
+	if store.UserID != userID {
+		return errors.New("unauthorized: cannot create product for another user's store")
+	}
+
 	// Check if SKU already exists
-	skuExists, err := uc.productRepo.SKUExists(product.SKU, 0) // 0 for no exclude ID
+	skuExists, err := uc.productRepo.SKUExists(product.SKU, 0)
 	if err != nil {
 		return err
 	}
@@ -47,7 +61,7 @@ func (uc *productUseCase) Create(product *domain.Product) error {
 	}
 
 	// Check if Slug already exists
-	slugExists, err := uc.productRepo.SlugExists(product.Slug, 0) // 0 for no exclude ID
+	slugExists, err := uc.productRepo.SlugExists(product.Slug, 0)
 	if err != nil {
 		return err
 	}
@@ -64,55 +78,52 @@ func (uc *productUseCase) GetByID(id uint) (*domain.Product, error) {
 }
 
 // Update an existing product.
-func (uc *productUseCase) Update(product *domain.Product) error {
-	// First, check if the product exists.
+func (uc *productUseCase) Update(product *domain.Product, userID uint) error {
 	existingProduct, err := uc.productRepo.FindByID(product.ID)
 	if err != nil {
 		return errors.New("product not found")
 	}
 
-	// Update fields only if they are explicitly provided in the input 'product'
-	// Check and update StoreID if provided and different
-	if product.StoreID != 0 && existingProduct.StoreID != product.StoreID {
-		// Validate if the new store exists
-		_, err := uc.storeRepo.FindByID(product.StoreID)
+	store, err := uc.storeRepo.FindByID(existingProduct.StoreID)
+	if err != nil {
+		return errors.New("store not found for product")
+	}
+
+	// ✅ Validasi: user hanya boleh ubah produk dari toko miliknya
+	if store.UserID != userID {
+		return errors.New("unauthorized: cannot update product from another user's store")
+	}
+
+	// Field update
+	if product.StoreID != 0 && product.StoreID != existingProduct.StoreID {
+		newStore, err := uc.storeRepo.FindByID(product.StoreID)
 		if err != nil {
 			return errors.New("new StoreID not found")
+		}
+		if newStore.UserID != userID {
+			return errors.New("unauthorized: cannot move product to another user's store")
 		}
 		existingProduct.StoreID = product.StoreID
 	}
 
-	// Check and update CategoryID if provided and different
-	if product.CategoryID != 0 && existingProduct.CategoryID != product.CategoryID {
-		// Validate if the new category exists
-		_, err := uc.categoryRepo.FindByID(product.CategoryID)
-		if err != nil {
+	if product.CategoryID != 0 && product.CategoryID != existingProduct.CategoryID {
+		if _, err := uc.categoryRepo.FindByID(product.CategoryID); err != nil {
 			return errors.New("new CategoryID not found")
 		}
 		existingProduct.CategoryID = product.CategoryID
 	}
 
-	// Check and update SKU if provided and different
-	if product.SKU != "" && existingProduct.SKU != product.SKU {
-		// Check if new SKU already exists for another product
-		skuExists, err := uc.productRepo.SKUExists(product.SKU, product.ID)
-		if err != nil {
-			return err
-		}
-		if skuExists {
+	if product.SKU != "" && product.SKU != existingProduct.SKU {
+		exists, _ := uc.productRepo.SKUExists(product.SKU, product.ID)
+		if exists {
 			return errors.New("product SKU already exists")
 		}
 		existingProduct.SKU = product.SKU
 	}
 
-	// Check and update Slug if provided and different
-	if product.Slug != "" && existingProduct.Slug != product.Slug {
-		// Check if new Slug already exists for another product
-		slugExists, err := uc.productRepo.SlugExists(product.Slug, product.ID)
-		if err != nil {
-			return err
-		}
-		if slugExists {
+	if product.Slug != "" && product.Slug != existingProduct.Slug {
+		exists, _ := uc.productRepo.SlugExists(product.Slug, product.ID)
+		if exists {
 			return errors.New("product slug already exists")
 		}
 		existingProduct.Slug = product.Slug
@@ -136,33 +147,39 @@ func (uc *productUseCase) Update(product *domain.Product) error {
 	if product.Images != "" {
 		existingProduct.Images = product.Images
 	}
-	// IsAvailable is not directly updatable via product_handler.go's UpdateProductRequest.
-	// If it needs to be updated, it should be added to UpdateProductRequest.
 
 	return uc.productRepo.Update(existingProduct)
 }
 
-// Delete a product by its ID.
-func (uc *productUseCase) Delete(id uint) error {
-	// First, check if the product exists.
-	_, err := uc.productRepo.FindByID(id)
+// Delete removes a product if it belongs to the user's store.
+func (uc *productUseCase) Delete(id uint, userID uint) error {
+	product, err := uc.productRepo.FindByID(id)
 	if err != nil {
 		return errors.New("product not found")
 	}
+
+	store, err := uc.storeRepo.FindByID(product.StoreID)
+	if err != nil {
+		return errors.New("store not found for product")
+	}
+
+	// ✅ Validasi: hanya owner store bisa menghapus produk
+	if store.UserID != userID {
+		return errors.New("unauthorized: cannot delete another user's product")
+	}
+
 	return uc.productRepo.Delete(id)
 }
 
-// GetAll retrieves all products.
-func (uc *productUseCase) GetAll() ([]domain.Product, error) {
-	return uc.productRepo.GetAll()
+// GetProducts retrieves products based on filters (public endpoint).
+func (uc *productUseCase) GetProducts(filter domain.ProductFilter) ([]domain.Product, int64, error) {
+	return uc.productRepo.GetProducts(filter)
 }
 
-// GetUserProducts retrieves all products for stores owned by a specific user.
-func (uc *productUseCase) GetUserProducts(userID uint) ([]domain.Product, error) {
-	// Check if the user exists
-	_, err := uc.userRepo.FindByID(userID) // This line will cause an error because userRepo is not defined in productUseCase
-	if err != nil {
-		return nil, errors.New("user not found")
+// GetUserProducts retrieves products for stores owned by a specific user.
+func (uc *productUseCase) GetUserProducts(filter domain.ProductFilter) ([]domain.Product, int64, error) {
+	if _, err := uc.userRepo.FindByID(filter.UserID); err != nil {
+		return nil, 0, errors.New("user not found")
 	}
-	return uc.productRepo.GetUserProducts(userID)
+	return uc.productRepo.GetProducts(filter)
 }

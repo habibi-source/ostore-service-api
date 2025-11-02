@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"mini-project-ostore/internal/domain"
+	"mini-project-ostore/internal/domain" // Import the domain package
 	"mini-project-ostore/internal/usecase"
 
 	"github.com/gin-gonic/gin"
@@ -38,6 +38,15 @@ type UpdateStoreRequest struct {
 	PhotoProfile *multipart.FileHeader `form:"photo_profile"` // Field for file upload
 }
 
+// PaginatedStoreResponse defines the structure for a paginated list of stores.
+type PaginatedStoreResponse struct {
+	Stores     []domain.Store `json:"stores"`
+	Page       int            `json:"page"`
+	Limit      int            `json:"limit"`
+	TotalCount int64          `json:"total_count"`
+	TotalPages int            `json:"total_pages"`
+}
+
 // CreateStore handles the creation of a new store.
 func (h *StoreHandler) CreateStore(c *gin.Context) {
 	var req CreateStoreRequest
@@ -65,14 +74,49 @@ func (h *StoreHandler) CreateStore(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"message": "Store created successfully", "store_id": store.ID})
 }
 
-// GetStores retrieves all stores.
+// GetStores retrieves all stores with pagination and filtering.
 func (h *StoreHandler) GetStores(c *gin.Context) {
-	stores, err := h.storeUC.GetAll()
+	var filter domain.StoreFilter
+
+	// Parse pagination parameters
+	if pageStr := c.Query("page"); pageStr != "" {
+		if page, err := strconv.Atoi(pageStr); err == nil {
+			filter.Page = page
+		}
+	}
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil {
+			filter.Limit = limit
+		}
+	}
+
+	filter.SetDefaults() // Apply default page and limit if not set
+
+	// Parse filtering parameters
+	filter.Search = c.Query("search")
+
+	stores, totalCount, err := h.storeUC.GetStores(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, stores)
+
+	totalPages := 0
+	if filter.Limit > 0 {
+		totalPages = int((totalCount + int64(filter.Limit) - 1) / int64(filter.Limit))
+	}
+
+	c.JSON(http.StatusOK, domain.StandardPaginatedResponse{
+		Status:  true,
+		Message: "Succeed to GET data",
+		Data: PaginatedStoreResponse{
+			Stores:     stores,
+			Page:       filter.Page,
+			Limit:      filter.Limit,
+			TotalCount: totalCount,
+			TotalPages: totalPages,
+		},
+	})
 }
 
 // GetUserStores retrieves all stores for a specific user.

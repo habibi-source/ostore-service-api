@@ -12,7 +12,7 @@ type CategoryRepository interface {
 	FindByID(id uint) (*domain.Category, error)
 	Update(category *domain.Category) error
 	Delete(id uint) error
-	FindAll() ([]domain.Category, error)
+	FindAll(filter domain.CategoryFilter) ([]domain.Category, int64, error)
 }
 
 // categoryRepository implements the CategoryRepository interface.
@@ -47,9 +47,27 @@ func (r *categoryRepository) Delete(id uint) error {
 	return r.db.Delete(&domain.Category{}, id).Error
 }
 
-// FindAll retrieves all categories from the database.
-func (r *categoryRepository) FindAll() ([]domain.Category, error) {
+// FindAll retrieves all categories from the database with pagination and filtering.
+func (r *categoryRepository) FindAll(filter domain.CategoryFilter) ([]domain.Category, int64, error) {
 	var categories []domain.Category
-	err := r.db.Find(&categories).Error
-	return categories, err
+	query := r.db.Model(&domain.Category{})
+
+	// Apply search filter
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		query = query.Where("name LIKE ? OR description LIKE ?", searchPattern, searchPattern)
+	}
+
+	// Get total count before applying pagination
+	var totalCount int64
+	if err := query.Count(&totalCount).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// Apply pagination
+	offset := (filter.Page - 1) * filter.Limit
+	query = query.Limit(filter.Limit).Offset(offset)
+
+	err := query.Find(&categories).Error
+	return categories, totalCount, err
 }

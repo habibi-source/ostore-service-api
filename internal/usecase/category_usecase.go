@@ -12,7 +12,7 @@ type CategoryUseCase interface {
 	GetByID(id uint) (*domain.Category, error)
 	Update(category *domain.Category) error
 	Delete(id uint) error
-	GetAll() ([]domain.Category, error)
+	GetCategories(filter domain.CategoryFilter) ([]domain.Category, int64, error)
 }
 
 // categoryUseCase implements the CategoryUseCase interface.
@@ -62,7 +62,7 @@ func (uc *categoryUseCase) Delete(id uint) error {
 	return uc.categoryRepo.Delete(id)
 }
 
-// GetAll retrieves all categories.
-func (uc *categoryUseCase) GetAll() ([]domain.Category, error) {
-	return uc.categoryRepo.FindAll()
+// GetCategories retrieves all categories with pagination and filtering.
+func (uc *categoryUseCase) GetCategories(filter domain.CategoryFilter) ([]domain.Category, int64, error) {
+	return uc.categoryRepo.FindAll(filter)
 }

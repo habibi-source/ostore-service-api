@@ -11,8 +11,8 @@ import (
 
 type TransactionUseCase interface {
 	Create(transaction *domain.Transaction) error
-	GetByID(id uint) (*domain.Transaction, error)
-	GetByUserID(userID uint) ([]domain.Transaction, error)
+	GetByID(id, userID uint) (*domain.Transaction, error) // Updated to include userID
+	GetUserTransactions(filter domain.TransactionFilter) ([]domain.Transaction, int64, error)
 }
 
 type transactionUseCase struct {
@@ -76,10 +76,22 @@ func (uc *transactionUseCase) Create(transaction *domain.Transaction) error {
 	return uc.transactionRepo.Create(transaction)
 }
 
-func (uc *transactionUseCase) GetByID(id uint) (*domain.Transaction, error) {
-	return uc.transactionRepo.FindByID(id)
+// GetByID retrieves a transaction by its ID and userID for ownership validation.
+func (uc *transactionUseCase) GetByID(id, userID uint) (*domain.Transaction, error) {
+	// Optionally, check if the user exists before querying the transaction
+	_, err := uc.userRepo.FindByID(userID)
+	if err != nil {
+		return nil, errors.New("user not found or an error occurred while checking user existence")
+	}
+	return uc.transactionRepo.FindByID(id, userID)
 }
 
-func (uc *transactionUseCase) GetByUserID(userID uint) ([]domain.Transaction, error) {
-	return uc.transactionRepo.FindByUserID(userID)
+// GetUserTransactions retrieves transactions for a specific user with pagination and filtering.
+func (uc *transactionUseCase) GetUserTransactions(filter domain.TransactionFilter) ([]domain.Transaction, int64, error) {
+	// Validate UserID from filter
+	_, err := uc.userRepo.FindByID(filter.UserID)
+	if err != nil {
+		return nil, 0, errors.New("user not found or an error occurred while checking user existence")
+	}
+	return uc.transactionRepo.FindAll(filter)
 }

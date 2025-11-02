@@ -16,11 +16,12 @@ type AuthUseCase interface {
 }
 
 type authUseCase struct {
-	userRepo repository.UserRepository
+	userRepo  repository.UserRepository
+	storeRepo repository.StoreRepository // Add StoreRepository dependency
 }
 
-func NewAuthUseCase(userRepo repository.UserRepository) AuthUseCase {
-	return &authUseCase{userRepo: userRepo}
+func NewAuthUseCase(userRepo repository.UserRepository, storeRepo repository.StoreRepository) AuthUseCase {
+	return &authUseCase{userRepo: userRepo, storeRepo: storeRepo}
 }
 
 func (uc *authUseCase) Register(user *domain.User) error {
@@ -51,7 +52,28 @@ func (uc *authUseCase) Register(user *domain.User) error {
 	}
 	user.Password = string(hashedPassword)
 
-	return uc.userRepo.Create(user)
+	// Create the user
+	if err := uc.userRepo.Create(user); err != nil {
+		return err
+	}
+
+	// Automatically create a store for the new user
+	store := &domain.Store{
+		UserID:      user.ID,
+		Name:        user.Name + "'s Store", // Default store name
+		Description: "Default store description",
+		Address:     "Default Address",      // Default address
+		Phone:       user.Phone,             // Use user's phone for store phone
+		// PhotoProfile can be empty or a default image path
+	}
+
+	if err := uc.storeRepo.Create(store); err != nil {
+		// If store creation fails, consider rolling back user creation or logging an error
+		// For simplicity, we just return the error for now.
+		return errors.New("failed to create default store for user: " + err.Error())
+	}
+
+	return nil // Successfully created user and default store
 }
 
 func (uc *authUseCase) Login(email, password string) (string, *domain.User, error) {

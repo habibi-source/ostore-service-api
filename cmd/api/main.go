@@ -45,7 +45,7 @@ func main() {
 	// INITIALIZE USECASES
 	// ------------------------
 	userUC := usecase.NewUserUseCase(userRepo, storeRepo)
-	authUC := usecase.NewAuthUseCase(userRepo)
+	authUC := usecase.NewAuthUseCase(userRepo, storeRepo)
 	storeUC := usecase.NewStoreUseCase(storeRepo, userRepo)
 	addressUC := usecase.NewAddressUseCase(addressRepo, userRepo)
 	categoryUC := usecase.NewCategoryUseCase(categoryRepo)
@@ -105,6 +105,7 @@ func main() {
 		{
 			userGroup.GET("", userHandler.GetUserProfile)
 			userGroup.PUT("", userHandler.UpdateUserProfile)
+			userGroup.GET("/products", productHandler.GetUserProducts)
 
 			// ADDRESS
 			userGroup.GET("/alamat", addressHandler.GetUserAddresses)

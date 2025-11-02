@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"mini-project-ostore/internal/domain"
+	"mini-project-ostore/internal/domain" // Import the domain package
 	"mini-project-ostore/internal/usecase"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +28,15 @@ type UpdateCategoryRequest struct {
 	Description string `json:"description"`
 }
 
+// PaginatedCategoryResponse defines the structure for a paginated list of categories.
+type PaginatedCategoryResponse struct {
+	Categories []domain.Category `json:"categories"`
+	Page       int               `json:"page"`
+	Limit      int               `json:"limit"`
+	TotalCount int64             `json:"total_count"`
+	TotalPages int               `json:"total_pages"`
+}
+
 // CreateCategory handles the creation of a new category.
 func (h *CategoryHandler) CreateCategory(c *gin.Context) {
 	var req CreateCategoryRequest
@@ -49,14 +58,49 @@ func (h *CategoryHandler) CreateCategory(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"message": "Category created successfully", "category_id": category.ID})
 }
 
-// GetCategories retrieves all categories.
+// GetCategories retrieves all categories with pagination and filtering.
 func (h *CategoryHandler) GetCategories(c *gin.Context) {
-	categories, err := h.categoryUC.GetAll()
+	var filter domain.CategoryFilter
+
+	// Parse pagination parameters
+	if pageStr := c.Query("page"); pageStr != "" {
+		if page, err := strconv.Atoi(pageStr); err == nil {
+			filter.Page = page
+		}
+	}
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil {
+			filter.Limit = limit
+		}
+	}
+
+	filter.SetDefaults() // Apply default page and limit if not set
+
+	// Parse filtering parameters
+	filter.Search = c.Query("search")
+
+	categories, totalCount, err := h.categoryUC.GetCategories(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, categories)
+
+	totalPages := 0
+	if filter.Limit > 0 {
+		totalPages = int((totalCount + int64(filter.Limit) - 1) / int64(filter.Limit))
+	}
+
+	c.JSON(http.StatusOK, domain.StandardPaginatedResponse{
+		Status:  true,
+		Message: "Succeed to GET data",
+		Data: PaginatedCategoryResponse{
+			Categories: categories,
+			Page:       filter.Page,
+			Limit:      filter.Limit,
+			TotalCount: totalCount,
+			TotalPages: totalPages,
+		},
+	})
 }
 
 // GetCategoryByID retrieves a single category by its ID.
